@@ -1,0 +1,13 @@
+[package]
+name    = "lex-oms"
+version = "0.1.0"
+lex     = "0.9.5"
+[dependencies]
+lex-money      = { path = "../lex-money" }
+lex-orm        = { path = "../lex-orm" }
+lex-trail      = { path = "../lex-trail" }
+lex-positions  = { path = "../lex-positions" }
+lex-trade      = { path = "../lex-trade" }
+lex-marketdata = { path = "../lex-marketdata" }
+lex-web        = { path = "../lex-web" }
+lex-risk       = { path = "../lex-risk" }
