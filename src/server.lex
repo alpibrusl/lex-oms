@@ -1,13 +1,16 @@
 # lex-oms — HTTP Order Management System
 #
 # Endpoints:
-#   POST /orders              validate + simulated submit to exchange
+#   POST /orders              validate + position check + enqueue to exchange
 #   POST /execution-reports   apply lifecycle event + update positions
-#   POST /cancel              validate cancel request
-#   POST /replace             validate cancel/replace request
+#   POST /cancel              validate cancel + transition to PendingCancel + trail
+#   POST /replace             validate cancel/replace + state transitions + trail
 #   GET  /blotter             list all order states
 #   GET  /positions           current positions by account/symbol
 #   GET  /audit               trail events (all, newest-first)
+#   GET  /risk                portfolio risk snapshot
+#   GET  /queue               pending job count
+#   POST /queue/tick          process one queued order job
 #
 # Run:
 #   lex run --allow-effects io,net,time,sql,concurrent \
@@ -39,6 +42,8 @@ import "lex-orm/src/error" as dbe
 
 import "lex-trail/src/log" as trail_log
 
+import "lex-jobs/src/jobs" as jobs
+
 import "lex-positions/src/position_store" as pstore
 
 import "lex-positions/src/position" as pos
@@ -62,6 +67,10 @@ import "lex-trade/src/replace" as replace
 import "lex-trade/src/price_check" as pc
 
 import "lex-trade/src/exec_report_from_str" as efrs
+
+import "lex-trade/src/trail_kinds" as kinds
+
+import "lex-trade/src/position_check" as position_check
 
 import "lex-money/src/decimal" as d
 
@@ -189,7 +198,10 @@ fn init_db(db :: conn.ConnDb) -> [sql] Result[Unit, Str] {
     Err(e) => Err(dbe.message(e)),
     Ok(_) => match pstore.init(db) {
       Err(e) => Err(dbe.message(e)),
-      Ok(_) => Ok(()),
+      Ok(_) => match jobs.init_schema(db.handle) {
+        Err(e) => Err(e),
+        Ok(_) => Ok(()),
+      },
     },
   }
 }
@@ -222,12 +234,26 @@ fn post_orders(db :: conn.ConnDb, log :: trail_log.Log, c :: ctx.Ctx) -> [sql, t
           match risk_margin.pre_trade_check(b.quantity, mark_for_margin, mc) {
             Err(msg) => err_422([PositionViolation("margin: " + msg)]),
             Ok(_) => {
-              let result := vio.validate_and_log(o, lim, ref_opt, pc.default_tolerance(), "OMS", "EXCH01", log)
-              match result {
-                Rejected(vs) => err_422(vs),
-                Accepted(_) => {
-                  let __lex_discard_1 := ostore.upsert(db, b.cl_ord_id, account, b.symbol, PendingNew(()))
-                  resp.created_json(obj([kv_s("cl_ord_id", b.cl_ord_id), kv_s("status", "PendingNew"), kv_s("symbol", b.symbol), kv_s("account", account)]), "/blotter/" + b.cl_ord_id)
+              let pos_cfg := { max_notional: d.from_int(5000000), allow_flip: false }
+              let mark_str := match ref_opt {
+                None => "0",
+                Some(p) => pos.decimal_to_str(p),
+              }
+              match position_check.check_position(db, pos_cfg, o, mark_str) {
+                FailedPositionCheck(reason) => err_422([reason]),
+                PassedPositionCheck(_) => {
+                  let lar := vio.validate_log_and_record(o, lim, ref_opt, pc.default_tolerance(), "OMS", "EXCH01", log, "")
+                  match lar.result {
+                    Rejected(vs) => err_422(vs),
+                    Accepted(_) => {
+                      let __st := ostore.upsert(db, b.cl_ord_id, account, b.symbol, PendingNew(()))
+                      let job_id := match jobs.enqueue(db.handle, "orders", "order.submit", b.cl_ord_id) {
+                        Err(_) => 0,
+                        Ok(id) => id,
+                      }
+                      resp.created_json(obj([kv_s("cl_ord_id", b.cl_ord_id), kv_s("status", "PendingNew"), kv_s("symbol", b.symbol), kv_s("account", account), kv_s("entry_id", lar.entry_id), kv_i("job_id", job_id)]), "/blotter/" + b.cl_ord_id)
+                    },
+                  }
                 },
               }
             },
@@ -271,7 +297,7 @@ fn post_execution_reports(db :: conn.ConnDb, c :: ctx.Ctx) -> [sql] resp.Respons
 }
 
 # ---- POST /cancel ---------------------------------------------------
-fn post_cancel(db :: conn.ConnDb, c :: ctx.Ctx) -> [sql] resp.Response {
+fn post_cancel(db :: conn.ConnDb, log :: trail_log.Log, c :: ctx.Ctx) -> [sql, time] resp.Response {
   let parsed :: Result[CancelBody, Str] := json.parse(c.body)
   match parsed {
     Err(msg) => resp.bad_request("invalid JSON: " + msg),
@@ -282,7 +308,12 @@ fn post_cancel(db :: conn.ConnDb, c :: ctx.Ctx) -> [sql] resp.Response {
         let timestamp := or_str(b.timestamp, "20260101-00:00:00.000")
         match cancel.validate_cancel(db, b.cl_ord_id, b.orig_cl_ord_id, b.account, b.symbol, side, qty, timestamp, "OMS", "EXCH01") {
           Err(reason) => err_422([reason]),
-          Ok(req) => resp.json(obj([kv_s("cl_ord_id", req.cl_ord_id), kv_s("orig_cl_ord_id", req.orig_cl_ord_id), kv_s("symbol", req.symbol), kv_s("status", "CancelRequested")])),
+          Ok(req) => {
+            let __st := ostore.upsert(db, b.orig_cl_ord_id, b.account, b.symbol, PendingCancel(()))
+            let cancel_payload := obj([kv_s("orig_cl_ord_id", b.orig_cl_ord_id), kv_s("cl_ord_id", b.cl_ord_id), kv_s("symbol", b.symbol), kv_s("account", b.account)])
+            let __tr := trail_log.append(log, kinds.cancel_requested(), None, cancel_payload)
+            resp.json(obj([kv_s("cl_ord_id", req.cl_ord_id), kv_s("orig_cl_ord_id", req.orig_cl_ord_id), kv_s("symbol", req.symbol), kv_s("status", "CancelRequested")]))
+          },
         }
       },
     },
@@ -290,7 +321,7 @@ fn post_cancel(db :: conn.ConnDb, c :: ctx.Ctx) -> [sql] resp.Response {
 }
 
 # ---- POST /replace --------------------------------------------------
-fn post_replace(db :: conn.ConnDb, c :: ctx.Ctx) -> resp.Response {
+fn post_replace(db :: conn.ConnDb, log :: trail_log.Log, c :: ctx.Ctx) -> [sql, time] resp.Response {
   let parsed :: Result[ReplaceBody, Str] := json.parse(c.body)
   match parsed {
     Err(msg) => resp.bad_request("invalid JSON: " + msg),
@@ -307,8 +338,18 @@ fn post_replace(db :: conn.ConnDb, c :: ctx.Ctx) -> resp.Response {
           let orig := order.order(b.orig_cl_ord_id, b.symbol, side, b.quantity, kind, tif, account, trader_id, timestamp)
           let amnd := order.order(b.new_cl_ord_id, b.symbol, side, b.quantity, kind, tif, account, trader_id, timestamp)
           match replace.validate_replace(orig, amnd, lim, "OMS", "EXCH01") {
-            Rejected(vs) => err_422(vs),
-            Accepted(_) => resp.json(obj([kv_s("orig_cl_ord_id", b.orig_cl_ord_id), kv_s("new_cl_ord_id", b.new_cl_ord_id), kv_s("status", "ReplaceAccepted")])),
+            Rejected(vs) => {
+              let rej_payload := obj([kv_s("orig_cl_ord_id", b.orig_cl_ord_id), kv_s("new_cl_ord_id", b.new_cl_ord_id), kv_s("symbol", b.symbol)])
+              let __tr := trail_log.append(log, kinds.replace_rejected(), None, rej_payload)
+              err_422(vs)
+            },
+            Accepted(_) => {
+              let __pc := ostore.upsert(db, b.orig_cl_ord_id, b.account, b.symbol, PendingCancel(()))
+              let __pn := ostore.upsert(db, b.new_cl_ord_id, b.account, b.symbol, PendingNew(()))
+              let replace_payload := obj([kv_s("orig_cl_ord_id", b.orig_cl_ord_id), kv_s("new_cl_ord_id", b.new_cl_ord_id), kv_s("symbol", b.symbol), kv_s("account", b.account)])
+              let __tr := trail_log.append(log, kinds.replace_accepted(), None, replace_payload)
+              resp.json(obj([kv_s("orig_cl_ord_id", b.orig_cl_ord_id), kv_s("new_cl_ord_id", b.new_cl_ord_id), kv_s("status", "ReplaceAccepted")]))
+            },
           }
         },
       },
@@ -389,39 +430,63 @@ fn get_risk(db :: conn.ConnDb, _c :: ctx.Ctx) -> [sql] resp.Response {
   }
 }
 
+# ---- GET /queue -----------------------------------------------------
+fn get_queue(db :: conn.ConnDb, _c :: ctx.Ctx) -> [sql] resp.Response {
+  match jobs.count_pending(db.handle, "orders") {
+    Err(_) => resp.internal_error(),
+    Ok(n) => resp.json(obj([kv_s("queue", "orders"), kv_i("pending", n)])),
+  }
+}
+
+# ---- POST /queue/tick -----------------------------------------------
+fn post_queue_tick(db :: conn.ConnDb, _c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+  let dispatch := fn (_handler :: Str, _payload :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] jobs.WorkOutcome {
+    Done
+  }
+  match jobs.work_one(db.handle, "orders", dispatch) {
+    Err(_) => resp.internal_error(),
+    Ok(None) => resp.json(obj([kv_i("processed", 0)])),
+    Ok(Some(job)) => resp.json(obj([kv_i("processed", 1), kv_s("handler", job.handler), kv_s("payload", job.payload)])),
+  }
+}
+
 # ---- Router ---------------------------------------------------------
 fn app(db :: conn.ConnDb, log :: trail_log.Log) -> router.Router {
-  (((((((((router.new() |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/orders", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+  ((((((((((router.new() |> fn (r :: router.Router) -> router.Router {
+    router.route_effectful(r, "POST", "/orders", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       post_orders(db, log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/execution-reports", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "POST", "/execution-reports", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       post_execution_reports(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/cancel", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
-      post_cancel(db, c)
+    router.route_effectful(r, "POST", "/cancel", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+      post_cancel(db, log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/replace", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
-      post_replace(db, c)
+    router.route_effectful(r, "POST", "/replace", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+      post_replace(db, log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/blotter", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "GET", "/blotter", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       get_blotter(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/positions", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "GET", "/positions", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       get_positions(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/audit", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "GET", "/audit", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       get_audit(log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/risk", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "GET", "/risk", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       get_risk(db, c)
+    })
+  }) |> fn (r :: router.Router) -> router.Router {
+    router.route_effectful(r, "GET", "/queue", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+      get_queue(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
     router.use_mw(r, mw.cors(["*"]))
@@ -461,4 +526,3 @@ fn main() -> [net, io, time, crypto, random, sql, fs_read, fs_write, concurrent]
     },
   }
 }
-

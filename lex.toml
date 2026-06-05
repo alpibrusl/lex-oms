@@ -2,12 +2,14 @@
 name    = "lex-oms"
 version = "0.1.0"
 lex     = "0.9.7"
+
 [dependencies]
-lex-money      = { path = "../lex-money" }
-lex-orm        = { path = "../lex-orm" }
-lex-trail      = { path = "../lex-trail" }
-lex-positions  = { path = "../lex-positions" }
-lex-trade      = { path = "../lex-trade" }
-lex-marketdata = { path = "../lex-marketdata" }
-lex-web        = { path = "../lex-web" }
-lex-risk       = { path = "../lex-risk" }
+lex-money      = { git = "https://github.com/alpibrusl/lex-money" }
+lex-orm        = { git = "https://github.com/alpibrusl/lex-orm" }
+lex-trail      = { git = "https://github.com/alpibrusl/lex-trail" }
+lex-positions  = { git = "https://github.com/alpibrusl/lex-positions" }
+lex-trade      = { git = "https://github.com/alpibrusl/lex-trade" }
+lex-marketdata = { git = "https://github.com/alpibrusl/lex-marketdata" }
+lex-web        = { git = "https://github.com/alpibrusl/lex-web" }
+lex-risk       = { git = "https://github.com/alpibrusl/lex-risk" }
+lex-jobs       = { git = "https://github.com/alpibrusl/lex-jobs" }

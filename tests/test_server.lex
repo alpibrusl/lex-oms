@@ -272,8 +272,61 @@ fn intg_audit_returns_200(log :: trail_log.Log) -> [sql] Result[Unit, Str] {
   check("get_audit → 200", res.status == 200)
 }
 
+fn cancel_body(cl_ord_id :: Str, orig_cl_ord_id :: Str, symbol :: Str, side :: Str) -> Str {
+  "{\"cl_ord_id\":\"" + cl_ord_id + "\",\"orig_cl_ord_id\":\"" + orig_cl_ord_id + "\",\"account\":\"\",\"symbol\":\"" + symbol + "\",\"side\":\"" + side + "\",\"order_qty\":100,\"timestamp\":\"\"}"
+}
+
+fn replace_body(orig_cl_ord_id :: Str, new_cl_ord_id :: Str, symbol :: Str, side :: Str, qty :: Int) -> Str {
+  "{\"orig_cl_ord_id\":\"" + orig_cl_ord_id + "\",\"new_cl_ord_id\":\"" + new_cl_ord_id + "\",\"symbol\":\"" + symbol + "\",\"side\":\"" + side + "\",\"quantity\":" + int.to_str(qty) + ",\"order_type\":\"market\",\"price\":\"\",\"stop_price\":\"\",\"time_in_force\":\"\",\"account\":\"\",\"trader_id\":\"\",\"timestamp\":\"\"}"
+}
+
+# Cancel: order must be in New state to be cancelable; first ack it via exec report.
+fn intg_cancel_transitions_to_pending_cancel(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+  let __o := srv.post_orders(db, log, make_ctx(order_body("C001", "AAPL", "buy", 10, "market")))
+  let ack := make_ctx(exec_body("EA001", "C001", "0", "0", "AAPL", "buy", "174.91", "0", "0"))
+  let __a := srv.post_execution_reports(db, ack)
+  let c := make_ctx(cancel_body("CXL001", "C001", "AAPL", "buy"))
+  let res := srv.post_cancel(db, log, c)
+  if res.status == 200 {
+    let blotter := srv.get_blotter(db, empty_ctx())
+    check("cancel: C001 transitions to PendingCancel", str.contains(blotter.body, "PendingCancel"))
+  } else {
+    Err("post_cancel status " + int.to_str(res.status) + ": " + res.body)
+  }
+}
+
+# Replace: orig transitions to PendingCancel, new order appears as PendingNew.
+fn intg_replace_manages_both_states(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+  let __o := srv.post_orders(db, log, make_ctx(order_body("R001", "MSFT", "buy", 10, "market")))
+  let ack := make_ctx(exec_body("ER001", "R001", "0", "0", "MSFT", "buy", "420.00", "0", "0"))
+  let __a := srv.post_execution_reports(db, ack)
+  let c := make_ctx(replace_body("R001", "R002", "MSFT", "buy", 20))
+  let res := srv.post_replace(db, log, c)
+  if res.status == 200 {
+    let blotter := srv.get_blotter(db, empty_ctx())
+    if str.contains(blotter.body, "PendingCancel") {
+      check("replace: R002 appears as PendingNew", str.contains(blotter.body, "PendingNew"))
+    } else {
+      Err("replace: R001 not transitioned to PendingCancel")
+    }
+  } else {
+    Err("post_replace status " + int.to_str(res.status) + ": " + res.body)
+  }
+}
+
+fn intg_queue_starts_empty(db :: conn.ConnDb) -> [sql] Result[Unit, Str] {
+  let res := srv.get_queue(db, empty_ctx())
+  check("get_queue → 200", res.status == 200)
+}
+
+fn intg_order_enqueues_job(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+  let __o := srv.post_orders(db, log, make_ctx(order_body("Q001", "AAPL", "buy", 5, "market")))
+  let res := srv.get_queue(db, empty_ctx())
+  check("accepted order enqueues a job", str.contains(res.body, "pending"))
+}
+
 fn suite_integration(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] List[Result[Unit, Str]] {
-  [intg_init_db(db), intg_post_orders_valid(db, log), intg_post_orders_bad_side(db, log), intg_post_orders_limit_no_price(db, log), intg_post_orders_bad_json(db, log), intg_blotter_after_order(db, log), intg_exec_report_partial_fill(db, log), intg_positions_after_fill(db, log), intg_audit_returns_200(log)]
+  [intg_init_db(db), intg_post_orders_valid(db, log), intg_post_orders_bad_side(db, log), intg_post_orders_limit_no_price(db, log), intg_post_orders_bad_json(db, log), intg_blotter_after_order(db, log), intg_exec_report_partial_fill(db, log), intg_positions_after_fill(db, log), intg_audit_returns_200(log), intg_cancel_transitions_to_pending_cancel(db, log), intg_replace_manages_both_states(db, log), intg_queue_starts_empty(db), intg_order_enqueues_job(db, log)]
 }
 
 fn integration_main() -> [sql, time, fs_write] Int {
