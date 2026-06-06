@@ -502,8 +502,8 @@ fn app(db :: conn.ConnDb, log :: trail_log.Log) -> router.Router {
 # router.dispatch emits and net.serve_fn consumes.  Structural
 # equivalence bridges Request ↔ ctx.RawRequest and
 # resp.Response ↔ Response at the call sites.
-fn make_handler(db :: conn.ConnDb, log :: trail_log.Log) -> (Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] Response {
-  fn (req :: Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] Response {
+fn make_handler(db :: conn.ConnDb, log :: trail_log.Log) -> (Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Response {
+  fn (req :: Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Response {
     let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
     let res := router.dispatch(app(db, log), raw)
     { status: res.status, body: BodyStr(res.body), headers: res.headers }
@@ -511,7 +511,7 @@ fn make_handler(db :: conn.ConnDb, log :: trail_log.Log) -> (Request) -> [io, ti
 }
 
 # ---- Entry point ----------------------------------------------------
-fn main() -> [net, io, time, crypto, random, sql, fs_read, fs_write, concurrent] Nil {
+fn main() -> [net, io, time, crypto, random, sql, fs_read, fs_write, concurrent, llm, proc] Nil {
   match conn.connect_sqlite(":memory:") {
     Err(err) => io.print("DB open failed: " + dbe.message(err)),
     Ok(db) => match trail_log.open_memory() {
