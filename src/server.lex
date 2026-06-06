@@ -453,39 +453,39 @@ fn post_queue_tick(db :: conn.ConnDb, _c :: ctx.Ctx) -> [io, time, crypto, rando
 # ---- Router ---------------------------------------------------------
 fn app(db :: conn.ConnDb, log :: trail_log.Log) -> router.Router {
   ((((((((((router.new() |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/orders", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "POST", "/orders", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       post_orders(db, log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/execution-reports", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "POST", "/execution-reports", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       post_execution_reports(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/cancel", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "POST", "/cancel", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       post_cancel(db, log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/replace", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "POST", "/replace", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       post_replace(db, log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/blotter", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "GET", "/blotter", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       get_blotter(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/positions", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "GET", "/positions", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       get_positions(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/audit", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "GET", "/audit", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       get_audit(log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/risk", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "GET", "/risk", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       get_risk(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/queue", fn (c :: ctx.Ctx) -> [io, time, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
+    router.route_effectful(r, "GET", "/queue", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] resp.Response {
       get_queue(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
