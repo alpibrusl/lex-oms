@@ -234,7 +234,7 @@ fn post_orders(db :: conn.ConnDb, log :: trail_log.Log, c :: ctx.Ctx) -> [sql, t
           match risk_margin.pre_trade_check(b.quantity, mark_for_margin, mc) {
             Err(msg) => err_422([PositionViolation("margin: " + msg)]),
             Ok(_) => {
-              let pos_cfg := { max_notional: d.from_int(5000000), allow_flip: false }
+              let pos_cfg := { max_notional: d.from_int(50000000), allow_flip: false }
               let mark_str := match ref_opt {
                 None => "0",
                 Some(p) => pos.decimal_to_str(p),
