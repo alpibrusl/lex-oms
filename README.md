@@ -38,7 +38,7 @@ GET /risk      → delta, notional, margin per position
 
 ```sh
 # HTTP server (port 8080)
-lex run --allow-effects concurrent,crypto,fs_read,fs_write,io,net,random,sql,time src/server.lex main
+lex run --allow-effects concurrent,crypto,fs_read,fs_write,io,llm,net,proc,random,sql,time src/server.lex main
 
 # Standalone lifecycle demo (no server)
 lex run --allow-effects concurrent,crypto,fs_read,fs_write,io,net,random,sql,time src/demo.lex main
@@ -48,11 +48,16 @@ lex run --allow-effects concurrent,crypto,fs_read,fs_write,io,net,random,sql,tim
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/orders` | Submit a new order |
-| `POST` | `/execution-reports` | Apply an exchange execution report |
-| `GET` | `/blotter` | All orders, newest first |
+| `POST` | `/orders` | Submit a new order (margin check → position check → validation → enqueue) |
+| `POST` | `/execution-reports` | Apply an exchange execution report; updates order state and position book |
+| `POST` | `/cancel` | Validate and record a cancel request; transitions order to PendingCancel |
+| `POST` | `/replace` | Validate cancel/replace; enforces FIX immutability rules (Side, Symbol) |
+| `GET` | `/blotter` | All orders (newest first, up to 200 rows) |
 | `GET` | `/positions` | Current positions with WAAC and realized PnL |
-| `GET` | `/risk` | Portfolio risk report |
+| `GET` | `/risk` | Portfolio risk snapshot (Greeks, notional, margin per position) |
+| `GET` | `/audit` | lex-trail events, newest first |
+| `GET` | `/queue` | Pending job count |
+| `POST` | `/queue/tick` | Process one queued order job |
 
 ## Install
 
