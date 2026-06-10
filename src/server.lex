@@ -32,6 +32,8 @@ import "std.sql" as sql
 
 import "std.map" as map
 
+import "std.time" as time
+
 import "std.json" as json
 
 import "lex-orm/src/connection" as conn
@@ -131,6 +133,21 @@ fn or_int(n :: Int, def :: Int) -> Int {
     def
   } else {
     n
+  }
+}
+
+# Trail timestamp for a request. When the caller provides a sim_ts_ms
+# state entry (in-process simulation dispatch — see lex-oms-agent), all
+# trail events for the request use that sim-time, making them content-
+# addressed reproducibly (replay verification). The HTTP path has no
+# such entry and falls back to the wall clock — unchanged behavior.
+fn req_ts(c :: ctx.Ctx) -> [time] Int {
+  match map.get(c.state, "sim_ts_ms") {
+    None => time.now_ms(),
+    Some(s) => match str.to_int(s) {
+      None => time.now_ms(),
+      Some(n) => n,
+    },
   }
 }
 
@@ -242,7 +259,7 @@ fn post_orders(db :: conn.ConnDb, log :: trail_log.Log, c :: ctx.Ctx) -> [sql, t
               match position_check.check_position(db, pos_cfg, o, mark_str) {
                 FailedPositionCheck(reason) => err_422([reason]),
                 PassedPositionCheck(_) => {
-                  let lar := vio.validate_log_and_record(o, lim, ref_opt, pc.default_tolerance(), "OMS", "EXCH01", log, "")
+                  let lar := vio.validate_log_and_record_at(o, lim, ref_opt, pc.default_tolerance(), "OMS", "EXCH01", log, "", req_ts(c))
                   match lar.result {
                     Rejected(vs) => err_422(vs),
                     Accepted(_) => {
@@ -311,7 +328,7 @@ fn post_cancel(db :: conn.ConnDb, log :: trail_log.Log, c :: ctx.Ctx) -> [sql, t
           Ok(req) => {
             let __st := ostore.upsert(db, b.orig_cl_ord_id, b.account, b.symbol, PendingCancel(()))
             let cancel_payload := obj([kv_s("orig_cl_ord_id", b.orig_cl_ord_id), kv_s("cl_ord_id", b.cl_ord_id), kv_s("symbol", b.symbol), kv_s("account", b.account)])
-            let __tr := trail_log.append(log, kinds.cancel_requested(), None, cancel_payload)
+            let __tr := trail_log.append_at(log, kinds.cancel_requested(), None, cancel_payload, req_ts(c))
             resp.json(obj([kv_s("cl_ord_id", req.cl_ord_id), kv_s("orig_cl_ord_id", req.orig_cl_ord_id), kv_s("symbol", req.symbol), kv_s("status", "CancelRequested")]))
           },
         }
@@ -340,14 +357,14 @@ fn post_replace(db :: conn.ConnDb, log :: trail_log.Log, c :: ctx.Ctx) -> [sql, 
           match replace.validate_replace(orig, amnd, lim, "OMS", "EXCH01") {
             Rejected(vs) => {
               let rej_payload := obj([kv_s("orig_cl_ord_id", b.orig_cl_ord_id), kv_s("new_cl_ord_id", b.new_cl_ord_id), kv_s("symbol", b.symbol)])
-              let __tr := trail_log.append(log, kinds.replace_rejected(), None, rej_payload)
+              let __tr := trail_log.append_at(log, kinds.replace_rejected(), None, rej_payload, req_ts(c))
               err_422(vs)
             },
             Accepted(_) => {
               let __pc := ostore.upsert(db, b.orig_cl_ord_id, b.account, b.symbol, PendingCancel(()))
               let __pn := ostore.upsert(db, b.new_cl_ord_id, b.account, b.symbol, PendingNew(()))
               let replace_payload := obj([kv_s("orig_cl_ord_id", b.orig_cl_ord_id), kv_s("new_cl_ord_id", b.new_cl_ord_id), kv_s("symbol", b.symbol), kv_s("account", b.account)])
-              let __tr := trail_log.append(log, kinds.replace_accepted(), None, replace_payload)
+              let __tr := trail_log.append_at(log, kinds.replace_accepted(), None, replace_payload, req_ts(c))
               resp.json(obj([kv_s("orig_cl_ord_id", b.orig_cl_ord_id), kv_s("new_cl_ord_id", b.new_cl_ord_id), kv_s("status", "ReplaceAccepted")]))
             },
           }
