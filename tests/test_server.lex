@@ -17,6 +17,7 @@ import "lex-orm/src/connection" as conn
 import "lex-trail/src/log" as trail_log
 
 import "../src/server" as srv
+import "../src/marks" as marks
 
 # ---- helpers --------------------------------------------------------
 fn check(name :: Str, cond :: Bool) -> Result[Unit, Str] {
@@ -267,6 +268,35 @@ fn intg_positions_after_fill(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, t
   }
 }
 
+# A simulation request carries sim_ts_ms in state; the OMS resolves the
+# mark from the seeded marks table at that timestamp.
+fn sim_ctx(body :: Str, ts :: Int) -> { method :: Str, path :: Str, query :: Str, body :: Str, path_params :: Map[Str, Str], headers :: Map[Str, Str], state :: Map[Str, Str] } {
+  { method: "POST", path: "/", query: "", body: body, path_params: map.new(), headers: map.from_list([("content-type", "application/json"), ("sim_ts_ms", int.to_str(ts))]), state: map.from_list([("sim_ts_ms", int.to_str(ts))]) }
+}
+
+# With a real mark seeded, a position-notional breach (600k AAPL @ $100 =
+# $60M > the $50M cap) is rejected — the gate is live, not inert.
+fn intg_post_orders_notional_breach(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+  let __m := marks.set(db, "AAPL", 5000, "100.00")
+  let res := srv.post_orders(db, log, sim_ctx(order_body("TNB", "AAPL", "buy", 600000, "market"), 5000))
+  check("notional breach with live mark → 422", res.status == 422)
+}
+
+# Same mark, modest size ($3M notional) is accepted — proves the breach
+# above is the notional gate firing, not a blanket rejection.
+fn intg_post_orders_within_notional(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+  let __m := marks.set(db, "AAPL", 5000, "100.00")
+  let res := srv.post_orders(db, log, sim_ctx(order_body("TWN", "AAPL", "buy", 30000, "market"), 5000))
+  check("within notional with live mark → 201", res.status == 201)
+}
+
+# In simulation, an order whose symbol has no seeded mark is rejected
+# rather than silently risk-checked against $0.
+fn intg_post_orders_missing_mark(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+  let res := srv.post_orders(db, log, sim_ctx(order_body("TMM", "ZZZZ", "buy", 1, "market"), 7777))
+  check("missing mark in sim → 422", res.status == 422)
+}
+
 fn intg_audit_returns_200(log :: trail_log.Log) -> [sql] Result[Unit, Str] {
   let res := srv.get_audit(log, empty_ctx())
   check("get_audit → 200", res.status == 200)
@@ -326,7 +356,7 @@ fn intg_order_enqueues_job(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, tim
 }
 
 fn suite_integration(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] List[Result[Unit, Str]] {
-  [intg_init_db(db), intg_post_orders_valid(db, log), intg_post_orders_bad_side(db, log), intg_post_orders_limit_no_price(db, log), intg_post_orders_bad_json(db, log), intg_blotter_after_order(db, log), intg_exec_report_partial_fill(db, log), intg_positions_after_fill(db, log), intg_audit_returns_200(log), intg_cancel_transitions_to_pending_cancel(db, log), intg_replace_manages_both_states(db, log), intg_queue_starts_empty(db), intg_order_enqueues_job(db, log)]
+  [intg_init_db(db), intg_post_orders_valid(db, log), intg_post_orders_bad_side(db, log), intg_post_orders_limit_no_price(db, log), intg_post_orders_bad_json(db, log), intg_blotter_after_order(db, log), intg_exec_report_partial_fill(db, log), intg_positions_after_fill(db, log), intg_post_orders_notional_breach(db, log), intg_post_orders_within_notional(db, log), intg_post_orders_missing_mark(db, log), intg_audit_returns_200(log), intg_cancel_transitions_to_pending_cancel(db, log), intg_replace_manages_both_states(db, log), intg_queue_starts_empty(db), intg_order_enqueues_job(db, log)]
 }
 
 fn integration_main() -> [sql, time, fs_write] Int {
@@ -338,4 +368,3 @@ fn integration_main() -> [sql, time, fs_write] Int {
     },
   }
 }
-
