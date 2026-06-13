@@ -78,6 +78,8 @@ import "lex-money/src/decimal" as d
 
 import "lex-marketdata/src/mock" as mock
 
+import "./marks" as marks
+
 import "lex-risk/src/margin" as risk_margin
 
 import "lex-risk/src/portfolio" as risk_portfolio
@@ -151,6 +153,30 @@ fn req_ts(c :: ctx.Ctx) -> [time] Int {
   }
 }
 
+# Reference mark for pre-trade risk checks. In simulation (sim_ts_ms in
+# state) the mark is drawn from the seeded marks table and a miss is a hard
+# reject — the sim must never risk-check against a phantom $0 price. The
+# HTTP path has no sim_ts_ms and keeps the existing static-mock behavior
+# (absent symbol => no mark, lenient pass), so live OMS semantics are
+# unchanged by this code.
+type MarkResult = MarkOk(Option[d.Decimal]) | MarkMissing(Str)
+
+fn resolve_mark(db :: conn.ConnDb, c :: ctx.Ctx, symbol :: Str) -> [sql] MarkResult {
+  match map.get(c.state, "sim_ts_ms") {
+    None => match mock.get_reference_price(symbol) {
+      Err(_) => MarkOk(None),
+      Ok(p) => MarkOk(Some(p)),
+    },
+    Some(ts_s) => match str.to_int(ts_s) {
+      None => MarkOk(None),
+      Some(ts) => match marks.get(db, symbol, ts) {
+        None => MarkMissing(symbol + "@" + ts_s),
+        Some(p) => MarkOk(Some(p)),
+      },
+    },
+  }
+}
+
 fn rejection_json(vs :: List[rejection.RejectionReason]) -> Str {
   let descs := list.map(vs, rejection.describe)
   obj([kv_s("status", "rejected"), q("violations") + ":" + arr(list.map(descs, q))])
@@ -158,6 +184,18 @@ fn rejection_json(vs :: List[rejection.RejectionReason]) -> Str {
 
 fn err_422(vs :: List[rejection.RejectionReason]) -> resp.Response {
   { body: rejection_json(vs), status: 422, headers: map.from_list([("content-type", "application/json")]) }
+}
+
+# Reject an order AND record it on the trail. The pre-trade margin and
+# position-notional gates previously returned a 422 without logging, so
+# downstream consumers that scan the trail for `trade.order.rejected`
+# (e.g. Lex Arena's disqualification check) never saw the breach. Logging
+# here makes every rejection — quantity, margin, or notional — a first-
+# class, replayable trail event.
+fn reject_logged(log :: trail_log.Log, c :: ctx.Ctx, cl_ord_id :: Str, symbol :: Str, vs :: List[rejection.RejectionReason]) -> [sql, time] resp.Response {
+  let rej_payload := obj([kv_s("cl_ord_id", cl_ord_id), kv_s("symbol", symbol), kv_s("status", "rejected"), kv_s("reason", str.join(list.map(vs, rejection.describe), "; "))])
+  let __tr := trail_log.append_at(log, kinds.order_rejected(), None, rej_payload, req_ts(c))
+  err_422(vs)
 }
 
 # ---- Side / kind parsing --------------------------------------------
@@ -217,7 +255,10 @@ fn init_db(db :: conn.ConnDb) -> [sql] Result[Unit, Str] {
       Err(e) => Err(dbe.message(e)),
       Ok(_) => match jobs.init_schema(db.handle) {
         Err(e) => Err(e),
-        Ok(_) => Ok(()),
+        Ok(_) => match marks.init(db) {
+          Err(e) => Err(dbe.message(e)),
+          Ok(_) => Ok(()),
+        },
       },
     },
   }
@@ -239,36 +280,37 @@ fn post_orders(db :: conn.ConnDb, log :: trail_log.Log, c :: ctx.Ctx) -> [sql, t
           let timestamp := or_str(b.timestamp, "20260101-00:00:00.000")
           let o := order.order(b.cl_ord_id, b.symbol, side, b.quantity, kind, tif, account, trader_id, timestamp)
           let lim := limit.default_limits()
-          let mark_for_margin := match mock.get_reference_price(b.symbol) {
-            Err(_) => d.zero(),
-            Ok(p) => p,
-          }
-          let ref_opt := match mock.get_reference_price(b.symbol) {
-            Err(_) => None,
-            Ok(p) => Some(p),
-          }
-          let mc := risk_margin.default_margin_config()
-          match risk_margin.pre_trade_check(b.quantity, mark_for_margin, mc) {
-            Err(msg) => err_422([PositionViolation("margin: " + msg)]),
-            Ok(_) => {
-              let pos_cfg := { max_notional: d.from_int(50000000), allow_flip: false }
-              let mark_str := match ref_opt {
-                None => "0",
-                Some(p) => pos.decimal_to_str(p),
+          match resolve_mark(db, c, b.symbol) {
+            MarkMissing(what) => reject_logged(log, c, b.cl_ord_id, b.symbol, [PositionViolation("no reference mark for " + what)]),
+            MarkOk(ref_opt) => {
+              let mark_for_margin := match ref_opt {
+                None => d.zero(),
+                Some(p) => p,
               }
-              match position_check.check_position(db, pos_cfg, o, mark_str) {
-                FailedPositionCheck(reason) => err_422([reason]),
-                PassedPositionCheck(_) => {
-                  let lar := vio.validate_log_and_record_at(o, lim, ref_opt, pc.default_tolerance(), "OMS", "EXCH01", log, "", req_ts(c))
-                  match lar.result {
-                    Rejected(vs) => err_422(vs),
-                    Accepted(_) => {
-                      let __st := ostore.upsert(db, b.cl_ord_id, account, b.symbol, PendingNew(()))
-                      let job_id := match jobs.enqueue(db.handle, "orders", "order.submit", b.cl_ord_id) {
-                        Err(_) => 0,
-                        Ok(id) => id,
+              let mc := risk_margin.default_margin_config()
+              match risk_margin.pre_trade_check(b.quantity, mark_for_margin, mc) {
+                Err(msg) => reject_logged(log, c, b.cl_ord_id, b.symbol, [PositionViolation("margin: " + msg)]),
+                Ok(_) => {
+                  let pos_cfg := { max_notional: d.from_int(50000000), allow_flip: false }
+                  let mark_str := match ref_opt {
+                    None => "0",
+                    Some(p) => pos.decimal_to_str(p),
+                  }
+                  match position_check.check_position(db, pos_cfg, o, mark_str) {
+                    FailedPositionCheck(reason) => reject_logged(log, c, b.cl_ord_id, b.symbol, [reason]),
+                    PassedPositionCheck(_) => {
+                      let lar := vio.validate_log_and_record_at(o, lim, ref_opt, pc.default_tolerance(), "OMS", "EXCH01", log, "", req_ts(c))
+                      match lar.result {
+                        Rejected(vs) => err_422(vs),
+                        Accepted(_) => {
+                          let __st := ostore.upsert(db, b.cl_ord_id, account, b.symbol, PendingNew(()))
+                          let job_id := match jobs.enqueue(db.handle, "orders", "order.submit", b.cl_ord_id) {
+                            Err(_) => 0,
+                            Ok(id) => id,
+                          }
+                          resp.created_json(obj([kv_s("cl_ord_id", b.cl_ord_id), kv_s("status", "PendingNew"), kv_s("symbol", b.symbol), kv_s("account", account), kv_s("entry_id", lar.entry_id), kv_i("job_id", job_id)]), "/blotter/" + b.cl_ord_id)
+                        },
                       }
-                      resp.created_json(obj([kv_s("cl_ord_id", b.cl_ord_id), kv_s("status", "PendingNew"), kv_s("symbol", b.symbol), kv_s("account", account), kv_s("entry_id", lar.entry_id), kv_i("job_id", job_id)]), "/blotter/" + b.cl_ord_id)
                     },
                   }
                 },
