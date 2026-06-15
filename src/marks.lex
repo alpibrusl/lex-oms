@@ -11,19 +11,26 @@
 # $50M position-notional or margin breach is rejected for real.
 
 import "std.sql" as sql
+
 import "std.list" as list
 
 import "lex-orm/src/connection" as conn
+
 import "lex-orm/src/query" as q
+
 import "lex-orm/src/error" as dbe
 
 import "lex-money/src/decimal" as d
+
 import "lex-positions/src/position" as pos
 
 fn init(db :: conn.ConnDb) -> [sql] Result[Unit, dbe.DbErr] {
   let ddl := "CREATE TABLE IF NOT EXISTS oms_marks (symbol TEXT NOT NULL, ts_ms INTEGER NOT NULL, price TEXT NOT NULL, PRIMARY KEY (symbol, ts_ms))"
   match sql.exec(db.handle, ddl, []) {
-    Err(e) => Err(dbe.sql_error(match e.code { None => "", Some(c) => c }, e.message)),
+    Err(e) => Err(dbe.sql_error(match e.code {
+      None => "",
+      Some(c) => c,
+    }, e.message)),
     Ok(_) => Ok(()),
   }
 }
@@ -32,7 +39,10 @@ fn init(db :: conn.ConnDb) -> [sql] Result[Unit, dbe.DbErr] {
 fn set(db :: conn.ConnDb, symbol :: Str, ts_ms :: Int, price_str :: Str) -> [sql] Result[Unit, dbe.DbErr] {
   let sq := q.for_dialect({ sql: "INSERT INTO oms_marks (symbol, ts_ms, price) VALUES (?, ?, ?) ON CONFLICT (symbol, ts_ms) DO UPDATE SET price = EXCLUDED.price", params: [PStr(symbol), PInt(ts_ms), PStr(price_str)] }, db.dialect)
   match sql.exec(db.handle, sq.sql, sq.params) {
-    Err(e) => Err(dbe.sql_error(match e.code { None => "", Some(c) => c }, e.message)),
+    Err(e) => Err(dbe.sql_error(match e.code {
+      None => "",
+      Some(c) => c,
+    }, e.message)),
     Ok(_) => Ok(()),
   }
 }
@@ -51,3 +61,4 @@ fn get(db :: conn.ConnDb, symbol :: Str, ts_ms :: Int) -> [sql] Option[d.Decimal
     },
   }
 }
+

@@ -17,6 +17,7 @@ import "lex-orm/src/connection" as conn
 import "lex-trail/src/log" as trail_log
 
 import "../src/server" as srv
+
 import "../src/marks" as marks
 
 # ---- helpers --------------------------------------------------------
@@ -368,3 +369,4 @@ fn integration_main() -> [sql, time, fs_write] Int {
     },
   }
 }
+
