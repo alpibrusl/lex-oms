@@ -1,5 +1,9 @@
 # lex-oms
 
+[![CI](https://github.com/alpibrusl/lex-oms/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/lex-oms/actions/workflows/ci.yml)
+
+**Part of the [Lex](https://lexlang.org) project** — Finance · [Manifesto](https://lexlang.org/manifesto) · [All packages](https://lexlang.org)
+
 HTTP order management system for Lex. The wiring layer that connects every piece of the stack.
 
 An order enters via `POST /orders`, passes through the full pre-trade gate (margin → position check → FIX conformance), is enqueued for dispatch, and updates positions on fill. Every decision is logged to a hash-chained audit trail. The position book, risk snapshot, and audit trail are readable via HTTP at any time.
