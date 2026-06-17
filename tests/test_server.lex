@@ -248,6 +248,7 @@ fn intg_blotter_after_order(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, ti
 
 fn intg_exec_report_partial_fill(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
   let __lex_discard_2 := srv.post_orders(db, log, make_ctx(order_body("T020", "AAPL", "buy", 100, "market")))
+  let __ack := srv.post_execution_reports(db, make_ctx(exec_body("E000", "T020", "0", "0", "AAPL", "buy", "174.91", "0", "0")))
   let er := make_ctx(exec_body("E001", "T020", "1", "1", "AAPL", "buy", "174.91", "50", "50"))
   let res := srv.post_execution_reports(db, er)
   if res.status == 200 {
@@ -259,6 +260,7 @@ fn intg_exec_report_partial_fill(db :: conn.ConnDb, log :: trail_log.Log) -> [sq
 
 fn intg_positions_after_fill(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
   let __lex_discard_3 := srv.post_orders(db, log, make_ctx(order_body("T030", "AAPL", "buy", 100, "market")))
+  let __ack := srv.post_execution_reports(db, make_ctx(exec_body("E000", "T030", "0", "0", "AAPL", "buy", "174.91", "0", "0")))
   let er := make_ctx(exec_body("E002", "T030", "2", "2", "AAPL", "buy", "174.91", "100", "100"))
   let __lex_discard_4 := srv.post_execution_reports(db, er)
   let res := srv.get_positions(db, empty_ctx())
