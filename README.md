@@ -81,3 +81,4 @@ lex-oms-agent
 [dependencies]
 "lex-oms" = { git = "https://github.com/alpibrusl/lex-oms" }
 ```
+
