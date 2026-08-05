@@ -54,6 +54,10 @@ fn exec_body(exec_id :: Str, cl_ord_id :: Str, exec_type :: Str, ord_status :: S
   "{\"exec_id\":\"" + exec_id + "\",\"order_id\":\"ORD001\",\"cl_ord_id\":\"" + cl_ord_id + "\",\"exec_type\":\"" + exec_type + "\",\"ord_status\":\"" + ord_status + "\",\"symbol\":\"" + symbol + "\",\"side\":\"" + side + "\",\"account\":\"\",\"order_qty\":\"100\",\"cum_qty\":\"" + cum_qty + "\",\"leaves_qty\":\"" + int.to_str(100 - 50) + "\",\"avg_px\":\"" + last_px + "\",\"last_px\":\"" + last_px + "\",\"last_qty\":\"" + last_qty + "\",\"text\":\"\"}"
 }
 
+fn mifid_body(side :: Str, last_px :: Str, last_qty :: Str, isin :: Str, mic :: Str) -> Str {
+  "{\"side\":\"" + side + "\",\"last_px\":\"" + last_px + "\",\"last_qty\":\"" + last_qty + "\",\"isin\":\"" + isin + "\",\"mic\":\"" + mic + "\",\"transaction_ref_no\":\"TXN001\",\"buyer_lei\":\"LEI_BUY\",\"seller_lei\":\"LEI_SELL\",\"trade_date\":\"2026-08-05\",\"trade_time\":\"10:00:00.000000\"}"
+}
+
 # ---- Pure: parse_side -----------------------------------------------
 fn test_parse_side_buy() -> Result[Unit, Str] {
   match srv.parse_side("buy") {
@@ -193,9 +197,34 @@ fn test_arr_two() -> Result[Unit, Str] {
   check("arr two", srv.arr(["1", "2"]) == "[1,2]")
 }
 
+# ---- Pure: post_mifid_report -----------------------------------------
+fn test_mifid_report_valid() -> Result[Unit, Str] {
+  let c := make_ctx(mifid_body("buy", "174.50", "100", "US0378331005", "XNAS"))
+  let res := srv.post_mifid_report(c)
+  check("post_mifid_report valid -> 200", res.status == 200)
+}
+
+fn test_mifid_report_missing_isin() -> Result[Unit, Str] {
+  let c := make_ctx(mifid_body("buy", "174.50", "100", "", "XNAS"))
+  let res := srv.post_mifid_report(c)
+  check("post_mifid_report missing isin -> 422", res.status == 422)
+}
+
+fn test_mifid_report_bad_side() -> Result[Unit, Str] {
+  let c := make_ctx(mifid_body("long", "174.50", "100", "US0378331005", "XNAS"))
+  let res := srv.post_mifid_report(c)
+  check("post_mifid_report bad side -> 400", res.status == 400)
+}
+
+fn test_mifid_report_bad_json() -> Result[Unit, Str] {
+  let c := make_ctx("{bad}")
+  let res := srv.post_mifid_report(c)
+  check("post_mifid_report bad JSON -> 400", res.status == 400)
+}
+
 # ---- Pure suite and run_all (called by lex test) --------------------
 fn suite_pure() -> List[Result[Unit, Str]] {
-  [test_parse_side_buy(), test_parse_side_sell(), test_parse_side_invalid(), test_parse_side_empty(), test_parse_market(), test_parse_limit_with_price(), test_parse_limit_no_price(), test_parse_stop_with_price(), test_parse_stop_no_price(), test_parse_stop_limit_both(), test_parse_stop_limit_no_stop(), test_parse_stop_limit_no_price(), test_parse_unknown_kind(), test_or_str_some(), test_or_str_none(), test_or_int_some(), test_or_int_none(), test_q(), test_kv_s(), test_kv_i(), test_obj_empty(), test_obj_single(), test_arr_empty(), test_arr_two()]
+  [test_parse_side_buy(), test_parse_side_sell(), test_parse_side_invalid(), test_parse_side_empty(), test_parse_market(), test_parse_limit_with_price(), test_parse_limit_no_price(), test_parse_stop_with_price(), test_parse_stop_no_price(), test_parse_stop_limit_both(), test_parse_stop_limit_no_stop(), test_parse_stop_limit_no_price(), test_parse_unknown_kind(), test_or_str_some(), test_or_str_none(), test_or_int_some(), test_or_int_none(), test_q(), test_kv_s(), test_kv_i(), test_obj_empty(), test_obj_single(), test_arr_empty(), test_arr_two(), test_mifid_report_valid(), test_mifid_report_missing_isin(), test_mifid_report_bad_side(), test_mifid_report_bad_json()]
 }
 
 fn run_all() -> Int {

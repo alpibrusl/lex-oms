@@ -3,6 +3,7 @@
 # Endpoints:
 #   POST /orders              validate + position check + enqueue to exchange
 #   POST /execution-reports   apply lifecycle event + update positions
+#   POST /mifid-report        build a MiFID II RTS 22 report (lex-finance, stateless)
 #   POST /cancel              validate cancel + transition to PendingCancel + trail
 #   POST /replace             validate cancel/replace + state transitions + trail
 #   GET  /blotter             list all order states
@@ -92,10 +93,20 @@ import "lex-web/src/router" as router
 
 import "lex-web/src/middleware" as mw
 
+import "lex-fix/src/v44/enums" as fix_en
+
+import "lex-finance/src/reporting/mifid_rts22" as mifid
+
 # ---- Request body types ---------------------------------------------
 type NewOrderBody = { cl_ord_id :: Str, symbol :: Str, side :: Str, quantity :: Int, order_type :: Str, price :: Str, stop_price :: Str, time_in_force :: Str, account :: Str, trader_id :: Str, timestamp :: Str }
 
 type ExecReportBody = { exec_id :: Str, order_id :: Str, cl_ord_id :: Str, exec_type :: Str, ord_status :: Str, symbol :: Str, side :: Str, account :: Str, order_qty :: Str, cum_qty :: Str, leaves_qty :: Str, avg_px :: Str, last_px :: Str, last_qty :: Str, text :: Str }
+
+# MifidReportBody carries the execution fields plus the reference data an
+# ExecutionReport does not carry (LEIs, ISIN/MIC, reporting timestamps).
+# The OMS has no instrument master or counterparty-LEI store, so it can
+# only pass through what the caller supplies rather than look it up.
+type MifidReportBody = { side :: Str, last_px :: Str, last_qty :: Str, isin :: Str, mic :: Str, transaction_ref_no :: Str, buyer_lei :: Str, seller_lei :: Str, trade_date :: Str, trade_time :: Str }
 
 type CancelBody = { cl_ord_id :: Str, orig_cl_ord_id :: Str, account :: Str, symbol :: Str, side :: Str, order_qty :: Int, timestamp :: Str }
 
@@ -355,6 +366,49 @@ fn post_execution_reports(db :: conn.ConnDb, c :: ctx.Ctx) -> [sql] resp.Respons
   }
 }
 
+# ---- POST /mifid-report ----------------------------------------------
+#
+# Stateless MiFID II RTS 22 transaction-report builder (lex-finance).
+# Not a lookup against stored order/execution state — see MifidReportBody.
+fn parse_fix_side(s :: Str) -> Result[fix_en.Side, resp.Response] {
+  if s == "buy" {
+    Ok(Buy(()))
+  } else {
+    if s == "sell" {
+      Ok(Sell(()))
+    } else {
+      Err(resp.bad_request("invalid side: " + s))
+    }
+  }
+}
+
+fn err_422_fields(missing :: List[Str]) -> resp.Response {
+  let quoted := list.map(missing, fn (s :: Str) -> Str {
+    "\"" + s + "\""
+  })
+  let body := "{\"missing_fields\":[" + str.join(quoted, ",") + "]}"
+  { body: body, status: 422, headers: map.from_list([("content-type", "application/json")]) }
+}
+
+fn post_mifid_report(c :: ctx.Ctx) -> resp.Response {
+  let parsed :: Result[MifidReportBody, Str] := json.parse(c.body)
+  match parsed {
+    Err(msg) => resp.bad_request("invalid JSON: " + msg),
+    Ok(b) => match parse_fix_side(b.side) {
+      Err(r) => r,
+      Ok(side) => {
+        let report := { exec_id: "", order_id: "", cl_ord_id: "", exec_type: ExecFill(()), ord_status: StatusFilled(()), symbol: "", side: side, order_qty: "", cum_qty: "", leaves_qty: "", avg_px: "", last_px: b.last_px, last_qty: b.last_qty, text: "" }
+        let instrument := { isin: b.isin, mic: b.mic }
+        let rctx := mifid.reporting_ctx(b.transaction_ref_no, b.buyer_lei, b.seller_lei, b.trade_date, b.trade_time)
+        match mifid.from_execution(report, instrument, rctx) {
+          Err(missing) => err_422_fields(missing),
+          Ok(tr) => { body: mifid.to_json_report(tr), status: 200, headers: map.from_list([("content-type", "application/json")]) },
+        }
+      },
+    },
+  }
+}
+
 # ---- POST /cancel ---------------------------------------------------
 fn post_cancel(db :: conn.ConnDb, log :: trail_log.Log, c :: ctx.Ctx) -> [sql, time] resp.Response {
   let parsed :: Result[CancelBody, Str] := json.parse(c.body)
@@ -511,13 +565,17 @@ fn post_queue_tick(db :: conn.ConnDb, _c :: ctx.Ctx) -> [io, time, crypto, rando
 
 # ---- Router ---------------------------------------------------------
 fn app(db :: conn.ConnDb, log :: trail_log.Log) -> router.Router {
-  ((((((((((router.new() |> fn (r :: router.Router) -> router.Router {
+  (((((((((((router.new() |> fn (r :: router.Router) -> router.Router {
     router.route_effectful(r, "POST", "/orders", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
       post_orders(db, log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
     router.route_effectful(r, "POST", "/execution-reports", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
       post_execution_reports(db, c)
+    })
+  }) |> fn (r :: router.Router) -> router.Router {
+    router.route_effectful(r, "POST", "/mifid-report", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+      post_mifid_report(c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
     router.route_effectful(r, "POST", "/cancel", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
