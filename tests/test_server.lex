@@ -227,8 +227,21 @@ fn suite_pure() -> List[Result[Unit, Str]] {
   [test_parse_side_buy(), test_parse_side_sell(), test_parse_side_invalid(), test_parse_side_empty(), test_parse_market(), test_parse_limit_with_price(), test_parse_limit_no_price(), test_parse_stop_with_price(), test_parse_stop_no_price(), test_parse_stop_limit_both(), test_parse_stop_limit_no_stop(), test_parse_stop_limit_no_price(), test_parse_unknown_kind(), test_or_str_some(), test_or_str_none(), test_or_int_some(), test_or_int_none(), test_q(), test_kv_s(), test_kv_i(), test_obj_empty(), test_obj_single(), test_arr_empty(), test_arr_two(), test_mifid_report_valid(), test_mifid_report_missing_isin(), test_mifid_report_bad_side(), test_mifid_report_bad_json()]
 }
 
+# `lex test` discards run_all's return value and only checks whether the
+# call raises a runtime error (confirmed against lex-cli's
+# test_runner.rs source), so a plain count_failures(...) return always
+# reports "pass" to `lex test`/`lex ci`, no matter how many assertions
+# actually fail -- the mifid_report tests above shipped with this gap.
+# Force a real runtime error (integer division by zero, confirmed to
+# exit nonzero) when there are failures so this suite actually gates.
 fn run_all() -> Int {
-  count_failures(suite_pure())
+  let failures := count_failures(suite_pure())
+  let _crash_if_failed := if failures > 0 {
+    1 / 0
+  } else {
+    0
+  }
+  failures
 }
 
 # ---- Integration tests (sql, time, fs_write) ------------------------
