@@ -13,3 +13,5 @@ lex-marketdata = { git = "https://github.com/alpibrusl/lex-marketdata" }
 lex-web        = { git = "https://github.com/alpibrusl/lex-web" }
 lex-risk       = { git = "https://github.com/alpibrusl/lex-risk" }
 lex-jobs       = { git = "https://github.com/alpibrusl/lex-jobs" }
+lex-fix        = { git = "https://github.com/alpibrusl/lex-fix" }
+lex-finance    = { git = "https://github.com/alpibrusl/lex-finance" }

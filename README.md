@@ -28,6 +28,7 @@ Three orders submitted, filled by the exchange, positions calculated with exact 
 |---|---|---|
 | `POST` | `/orders` | Pre-trade gate → enqueue → `201 Accepted` or `422` with rejection reasons |
 | `POST` | `/execution-reports` | Apply exchange fill; update order state + position book |
+| `POST` | `/mifid-report` | Build a MiFID II RTS 22 transaction report from caller-supplied execution + reference data ([lex-finance](https://github.com/alpibrusl/lex-finance)) |
 | `POST` | `/cancel` | Validate cancel request; transition order to `PendingCancel` |
 | `POST` | `/replace` | Cancel/replace; enforces FIX immutability (Side, Symbol immutable) |
 | `GET` | `/blotter` | All orders, newest first |
@@ -38,6 +39,8 @@ Three orders submitted, filled by the exchange, positions calculated with exact 
 | `POST` | `/queue/tick` | Process one queued order — dispatches to exchange gateway |
 
 **Note:** `/queue/tick` currently has no exchange gateway implementation. Orders are enqueued but the dispatch leg sends nothing. A FIX 4.4 gateway is tracked in [issue #2](https://github.com/alpibrusl/lex-oms/issues/2).
+
+**Note:** `/mifid-report` is stateless — it does not read stored orders/executions. The OMS has no instrument master or counterparty-LEI store, so LEIs, ISIN/MIC, and reporting timestamps must be supplied in the request body rather than looked up. Per `lex-finance`'s own scope note, this covers an expanded field subset and has not been verified against the ESMA RTS 22 field list — treat it as a starting point, not a compliant filing.
 
 ---
 
