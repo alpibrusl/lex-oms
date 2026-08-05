@@ -383,7 +383,9 @@ fn parse_fix_side(s :: Str) -> Result[fix_en.Side, resp.Response] {
 }
 
 fn err_422_fields(missing :: List[Str]) -> resp.Response {
-  let quoted := list.map(missing, fn (s :: Str) -> Str { "\"" + s + "\"" })
+  let quoted := list.map(missing, fn (s :: Str) -> Str {
+    "\"" + s + "\""
+  })
   let body := "{\"missing_fields\":[" + str.join(quoted, ",") + "]}"
   { body: body, status: 422, headers: map.from_list([("content-type", "application/json")]) }
 }
