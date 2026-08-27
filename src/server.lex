@@ -552,7 +552,7 @@ fn get_queue(db :: conn.ConnDb, _c :: ctx.Ctx) -> [sql] resp.Response {
 }
 
 # ---- POST /queue/tick -----------------------------------------------
-fn post_queue_tick(db :: conn.ConnDb, _c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn post_queue_tick(db :: conn.ConnDb, _c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   let dispatch := fn (_handler :: Str, _payload :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent] jobs.WorkOutcome {
     Done
   }
@@ -566,43 +566,43 @@ fn post_queue_tick(db :: conn.ConnDb, _c :: ctx.Ctx) -> [io, time, crypto, rando
 # ---- Router ---------------------------------------------------------
 fn app(db :: conn.ConnDb, log :: trail_log.Log) -> router.Router {
   (((((((((((router.new() |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/orders", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    router.route_effectful(r, "POST", "/orders", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
       post_orders(db, log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/execution-reports", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    router.route_effectful(r, "POST", "/execution-reports", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
       post_execution_reports(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/mifid-report", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    router.route_effectful(r, "POST", "/mifid-report", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
       post_mifid_report(c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/cancel", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    router.route_effectful(r, "POST", "/cancel", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
       post_cancel(db, log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "POST", "/replace", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    router.route_effectful(r, "POST", "/replace", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
       post_replace(db, log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/blotter", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    router.route_effectful(r, "GET", "/blotter", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
       get_blotter(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/positions", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    router.route_effectful(r, "GET", "/positions", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
       get_positions(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/audit", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    router.route_effectful(r, "GET", "/audit", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
       get_audit(log, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/risk", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    router.route_effectful(r, "GET", "/risk", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
       get_risk(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
-    router.route_effectful(r, "GET", "/queue", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    router.route_effectful(r, "GET", "/queue", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
       get_queue(db, c)
     })
   }) |> fn (r :: router.Router) -> router.Router {
@@ -619,8 +619,8 @@ fn app(db :: conn.ConnDb, log :: trail_log.Log) -> router.Router {
 # router.dispatch emits and net.serve_fn consumes.  Structural
 # equivalence bridges Request ↔ ctx.RawRequest and
 # resp.Response ↔ Response at the call sites.
-fn make_handler(db :: conn.ConnDb, log :: trail_log.Log) -> (Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Response {
-  fn (req :: Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Response {
+fn make_handler(db :: conn.ConnDb, log :: trail_log.Log) -> (Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] Response {
+  fn (req :: Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] Response {
     let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
     let res := router.dispatch(app(db, log), raw)
     { status: res.status, body: BodyStr(res.body), headers: res.headers }
@@ -628,7 +628,7 @@ fn make_handler(db :: conn.ConnDb, log :: trail_log.Log) -> (Request) -> [io, ti
 }
 
 # ---- Entry point ----------------------------------------------------
-fn main() -> [net, io, time, crypto, random, sql, fs_read, fs_write, concurrent, llm, proc] Nil {
+fn main() -> [net, io, time, crypto, random, sql, fs_read, fs_write, concurrent, llm, proc, approval] Nil {
   match conn.connect_sqlite(":memory:") {
     Err(err) => io.print("DB open failed: " + dbe.message(err)),
     Ok(db) => match trail_log.open_memory() {
