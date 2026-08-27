@@ -234,8 +234,13 @@ fn suite_pure() -> List[Result[Unit, Str]] {
 # actually fail -- the mifid_report tests above shipped with this gap.
 # Force a real runtime error (integer division by zero, confirmed to
 # exit nonzero) when there are failures so this suite actually gates.
-fn run_all() -> Int {
-  let failures := count_failures(suite_pure())
+# Both suites, because both can run here. The integration set was documented as
+# "run manually" and so ran nowhere: `lex test` calls run_all, run_all folded
+# only over suite_pure, and sixteen intg_ tests sat dark. They need nothing a CI
+# runner lacks — the database is :memory: and the trail is open_memory() — so
+# the manual-only note was costing coverage for no benefit.
+fn run_all() -> [sql, time, fs_write, approval] Int {
+  let failures := count_failures(suite_pure()) + integration_main()
   let _crash_if_failed := if failures > 0 {
     1 / 0
   } else {
@@ -244,9 +249,9 @@ fn run_all() -> Int {
   failures
 }
 
-# ---- Integration tests (sql, time, fs_write) ------------------------
-# Run manually:
-#   lex run --allow-effects sql,time,fs_write tests/test_server.lex integration_main
+# ---- Integration tests (sql, time, fs_write, approval) --------------
+# These run in CI via run_all. To run only this half:
+#   lex run --allow-effects sql,time,fs_write,approval tests/test_server.lex integration_main
 fn intg_init_db(db :: conn.ConnDb) -> [sql, fs_write] Result[Unit, Str] {
   match srv.init_db(db) {
     Err(msg) => Err("init_db: " + msg),
@@ -254,31 +259,31 @@ fn intg_init_db(db :: conn.ConnDb) -> [sql, fs_write] Result[Unit, Str] {
   }
 }
 
-fn intg_post_orders_valid(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_post_orders_valid(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let c := make_ctx(order_body("T001", "AAPL", "buy", 100, "market"))
   let res := srv.post_orders(db, log, c)
   check("post_orders valid → 201", res.status == 201)
 }
 
-fn intg_post_orders_bad_side(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_post_orders_bad_side(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let c := make_ctx(order_body("T002", "AAPL", "short", 100, "market"))
   let res := srv.post_orders(db, log, c)
   check("post_orders bad side → 400", res.status == 400)
 }
 
-fn intg_post_orders_limit_no_price(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_post_orders_limit_no_price(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let c := make_ctx(order_body("T003", "AAPL", "buy", 100, "limit"))
   let res := srv.post_orders(db, log, c)
   check("post_orders limit no price → 400", res.status == 400)
 }
 
-fn intg_post_orders_bad_json(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_post_orders_bad_json(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let c := make_ctx("{bad}")
   let res := srv.post_orders(db, log, c)
   check("post_orders bad JSON → 400", res.status == 400)
 }
 
-fn intg_blotter_after_order(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_blotter_after_order(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let __lex_discard_1 := srv.post_orders(db, log, make_ctx(order_body("T010", "MSFT", "sell", 50, "market")))
   let res := srv.get_blotter(db, empty_ctx())
   if res.status == 200 {
@@ -288,7 +293,7 @@ fn intg_blotter_after_order(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, ti
   }
 }
 
-fn intg_exec_report_partial_fill(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_exec_report_partial_fill(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let __lex_discard_2 := srv.post_orders(db, log, make_ctx(order_body("T020", "AAPL", "buy", 100, "market")))
   let __ack := srv.post_execution_reports(db, make_ctx(exec_body("E000", "T020", "0", "0", "AAPL", "buy", "174.91", "0", "0")))
   let er := make_ctx(exec_body("E001", "T020", "1", "1", "AAPL", "buy", "174.91", "50", "50"))
@@ -300,7 +305,7 @@ fn intg_exec_report_partial_fill(db :: conn.ConnDb, log :: trail_log.Log) -> [sq
   }
 }
 
-fn intg_positions_after_fill(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_positions_after_fill(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let __lex_discard_3 := srv.post_orders(db, log, make_ctx(order_body("T030", "AAPL", "buy", 100, "market")))
   let __ack := srv.post_execution_reports(db, make_ctx(exec_body("E000", "T030", "0", "0", "AAPL", "buy", "174.91", "0", "0")))
   let er := make_ctx(exec_body("E002", "T030", "2", "2", "AAPL", "buy", "174.91", "100", "100"))
@@ -321,7 +326,7 @@ fn sim_ctx(body :: Str, ts :: Int) -> { method :: Str, path :: Str, query :: Str
 
 # With a real mark seeded, a position-notional breach (600k AAPL @ $100 =
 # $60M > the $50M cap) is rejected — the gate is live, not inert.
-fn intg_post_orders_notional_breach(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_post_orders_notional_breach(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let __m := marks.set(db, "AAPL", 5000, "100.00")
   let res := srv.post_orders(db, log, sim_ctx(order_body("TNB", "AAPL", "buy", 600000, "market"), 5000))
   check("notional breach with live mark → 422", res.status == 422)
@@ -329,7 +334,7 @@ fn intg_post_orders_notional_breach(db :: conn.ConnDb, log :: trail_log.Log) -> 
 
 # Same mark, modest size ($3M notional) is accepted — proves the breach
 # above is the notional gate firing, not a blanket rejection.
-fn intg_post_orders_within_notional(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_post_orders_within_notional(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let __m := marks.set(db, "AAPL", 5000, "100.00")
   let res := srv.post_orders(db, log, sim_ctx(order_body("TWN", "AAPL", "buy", 30000, "market"), 5000))
   check("within notional with live mark → 201", res.status == 201)
@@ -337,12 +342,12 @@ fn intg_post_orders_within_notional(db :: conn.ConnDb, log :: trail_log.Log) -> 
 
 # In simulation, an order whose symbol has no seeded mark is rejected
 # rather than silently risk-checked against $0.
-fn intg_post_orders_missing_mark(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_post_orders_missing_mark(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let res := srv.post_orders(db, log, sim_ctx(order_body("TMM", "ZZZZ", "buy", 1, "market"), 7777))
   check("missing mark in sim → 422", res.status == 422)
 }
 
-fn intg_audit_returns_200(log :: trail_log.Log) -> [sql] Result[Unit, Str] {
+fn intg_audit_returns_200(log :: trail_log.Log) -> [sql, approval] Result[Unit, Str] {
   let res := srv.get_audit(log, empty_ctx())
   check("get_audit → 200", res.status == 200)
 }
@@ -356,7 +361,7 @@ fn replace_body(orig_cl_ord_id :: Str, new_cl_ord_id :: Str, symbol :: Str, side
 }
 
 # Cancel: order must be in New state to be cancelable; first ack it via exec report.
-fn intg_cancel_transitions_to_pending_cancel(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_cancel_transitions_to_pending_cancel(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let __o := srv.post_orders(db, log, make_ctx(order_body("C001", "AAPL", "buy", 10, "market")))
   let ack := make_ctx(exec_body("EA001", "C001", "0", "0", "AAPL", "buy", "174.91", "0", "0"))
   let __a := srv.post_execution_reports(db, ack)
@@ -371,7 +376,7 @@ fn intg_cancel_transitions_to_pending_cancel(db :: conn.ConnDb, log :: trail_log
 }
 
 # Replace: orig transitions to PendingCancel, new order appears as PendingNew.
-fn intg_replace_manages_both_states(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_replace_manages_both_states(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let __o := srv.post_orders(db, log, make_ctx(order_body("R001", "MSFT", "buy", 10, "market")))
   let ack := make_ctx(exec_body("ER001", "R001", "0", "0", "MSFT", "buy", "420.00", "0", "0"))
   let __a := srv.post_execution_reports(db, ack)
@@ -389,22 +394,22 @@ fn intg_replace_manages_both_states(db :: conn.ConnDb, log :: trail_log.Log) -> 
   }
 }
 
-fn intg_queue_starts_empty(db :: conn.ConnDb) -> [sql] Result[Unit, Str] {
+fn intg_queue_starts_empty(db :: conn.ConnDb) -> [sql, approval] Result[Unit, Str] {
   let res := srv.get_queue(db, empty_ctx())
   check("get_queue → 200", res.status == 200)
 }
 
-fn intg_order_enqueues_job(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] Result[Unit, Str] {
+fn intg_order_enqueues_job(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] Result[Unit, Str] {
   let __o := srv.post_orders(db, log, make_ctx(order_body("Q001", "AAPL", "buy", 5, "market")))
   let res := srv.get_queue(db, empty_ctx())
   check("accepted order enqueues a job", str.contains(res.body, "pending"))
 }
 
-fn suite_integration(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write] List[Result[Unit, Str]] {
+fn suite_integration(db :: conn.ConnDb, log :: trail_log.Log) -> [sql, time, fs_write, approval] List[Result[Unit, Str]] {
   [intg_init_db(db), intg_post_orders_valid(db, log), intg_post_orders_bad_side(db, log), intg_post_orders_limit_no_price(db, log), intg_post_orders_bad_json(db, log), intg_blotter_after_order(db, log), intg_exec_report_partial_fill(db, log), intg_positions_after_fill(db, log), intg_post_orders_notional_breach(db, log), intg_post_orders_within_notional(db, log), intg_post_orders_missing_mark(db, log), intg_audit_returns_200(log), intg_cancel_transitions_to_pending_cancel(db, log), intg_replace_manages_both_states(db, log), intg_queue_starts_empty(db), intg_order_enqueues_job(db, log)]
 }
 
-fn integration_main() -> [sql, time, fs_write] Int {
+fn integration_main() -> [sql, time, fs_write, approval] Int {
   match conn.connect_sqlite(":memory:") {
     Err(_) => 1,
     Ok(db) => match trail_log.open_memory() {
