@@ -113,16 +113,16 @@ type CancelBody = { cl_ord_id :: Str, orig_cl_ord_id :: Str, account :: Str, sym
 type ReplaceBody = { orig_cl_ord_id :: Str, new_cl_ord_id :: Str, symbol :: Str, side :: Str, quantity :: Int, order_type :: Str, price :: Str, stop_price :: Str, time_in_force :: Str, account :: Str, trader_id :: Str, timestamp :: Str }
 
 # ---- JSON response helpers ------------------------------------------
-fn q(s :: Str) -> Str {
+fn json_quote(s :: Str) -> Str {
   "\"" + s + "\""
 }
 
 fn kv_s(k :: Str, v :: Str) -> Str {
-  q(k) + ":" + q(v)
+  json_quote(k) + ":" + json_quote(v)
 }
 
 fn kv_i(k :: Str, v :: Int) -> Str {
-  q(k) + ":" + int.to_str(v)
+  json_quote(k) + ":" + int.to_str(v)
 }
 
 fn obj(fields :: List[Str]) -> Str {
@@ -190,7 +190,7 @@ fn resolve_mark(db :: conn.ConnDb, c :: ctx.Ctx, symbol :: Str) -> [sql] MarkRes
 
 fn rejection_json(vs :: List[rejection.RejectionReason]) -> Str {
   let descs := list.map(vs, rejection.describe)
-  obj([kv_s("status", "rejected"), q("violations") + ":" + arr(list.map(descs, q))])
+  obj([kv_s("status", "rejected"), json_quote("violations") + ":" + arr(list.map(descs, json_quote))])
 }
 
 fn err_422(vs :: List[rejection.RejectionReason]) -> resp.Response {
@@ -502,9 +502,9 @@ fn get_audit(log :: trail_log.Log, _c :: ctx.Ctx) -> [sql] resp.Response {
       let items := list.map(list.reverse(events), fn (evt :: { id :: Str, kind :: Str, parent :: Option[Str], payload_json :: Str, ts_ms :: Int }) -> Str {
         let parent_s := match evt.parent {
           None => "null",
-          Some(p) => q(p),
+          Some(p) => json_quote(p),
         }
-        "{" + q("id") + ":" + q(evt.id) + "," + q("kind") + ":" + q(evt.kind) + "," + q("parent") + ":" + parent_s + "," + q("ts_ms") + ":" + int.to_str(evt.ts_ms) + "," + q("payload") + ":" + evt.payload_json + "}"
+        "{" + json_quote("id") + ":" + json_quote(evt.id) + "," + json_quote("kind") + ":" + json_quote(evt.kind) + "," + json_quote("parent") + ":" + parent_s + "," + json_quote("ts_ms") + ":" + int.to_str(evt.ts_ms) + "," + json_quote("payload") + ":" + evt.payload_json + "}"
       })
       resp.json(arr(items))
     },
@@ -538,7 +538,7 @@ fn get_risk(db :: conn.ConnDb, _c :: ctx.Ctx) -> [sql] resp.Response {
       let pos_items := list.map(risk.positions, fn (pr :: risk_portfolio.PositionRisk) -> Str {
         obj([kv_s("account", pr.account), kv_s("symbol", pr.symbol), kv_i("qty", pr.qty), kv_i("delta", pr.delta), kv_s("dollar_delta", pos.decimal_to_str(pr.dollar_delta)), kv_s("gross_notional", pos.decimal_to_str(pr.gross_notional)), kv_s("unrealized_pnl", pos.decimal_to_str(pr.unrealized_pnl)), kv_s("initial_margin", pos.decimal_to_str(pr.initial_margin))])
       })
-      resp.json(obj([q("positions") + ":" + arr(pos_items), kv_s("net_dollar_delta", pos.decimal_to_str(risk.net_dollar_delta)), kv_s("total_notional", pos.decimal_to_str(risk.total_notional)), kv_s("total_unreal_pnl", pos.decimal_to_str(risk.total_unreal_pnl)), kv_s("total_margin", pos.decimal_to_str(risk.total_margin))]))
+      resp.json(obj([json_quote("positions") + ":" + arr(pos_items), kv_s("net_dollar_delta", pos.decimal_to_str(risk.net_dollar_delta)), kv_s("total_notional", pos.decimal_to_str(risk.total_notional)), kv_s("total_unreal_pnl", pos.decimal_to_str(risk.total_unreal_pnl)), kv_s("total_margin", pos.decimal_to_str(risk.total_margin))]))
     },
   }
 }
